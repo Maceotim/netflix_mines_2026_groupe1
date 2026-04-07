@@ -88,11 +88,10 @@ def decode_access_token(token: str) -> int:
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-def get_current_user(authorization: str = Header(...)) -> int:
-    if authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-    else:
-        token = authorization.strip()
+def get_current_user(authorization: str = Header(..., convert_underscores=False)) -> int:
+    if not authorization:
+        raise HTTPException(status_code=422, detail="Token manquant")
+    token = authorization.split(" ")[1] if " " in authorization else authorization
     return decode_access_token(token)
 
 
