@@ -29,8 +29,8 @@ class Film(BaseModel):
 
 class RegisterBody(BaseModel):
     email: str
-    pseudo: str
     password: str
+    pseudo: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -52,31 +52,30 @@ def create_access_token(user_id: int) -> str:
         "sub": user_id,
         "exp": int(time.time()) + 3600,
     }
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    body = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-    sig = hmac.new(
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("utf-8").rstrip("=")
+    signature = hmac.new(
         SECRET_KEY.encode("utf-8"),
-        body.encode("utf-8"),
+        payload_b64.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
-    return f"{body}.{sig}"
+    return f"{payload_b64}.{signature}"
 
 
 def decode_access_token(token: str) -> int:
     try:
-        body, sig = token.rsplit(".", 1)
-
-        expected_sig = hmac.new(
+        payload_b64, signature = token.rsplit(".", 1)
+        expected_signature = hmac.new(
             SECRET_KEY.encode("utf-8"),
-            body.encode("utf-8"),
+            payload_b64.encode("utf-8"),
             hashlib.sha256
         ).hexdigest()
 
-        if not hmac.compare_digest(sig, expected_sig):
+        if not hmac.compare_digest(signature, expected_signature):
             raise HTTPException(status_code=401, detail="Token invalide")
 
-        padding = "=" * (-len(body) % 4)
-        payload_json = base64.urlsafe_b64decode((body + padding).encode("utf-8")).decode("utf-8")
+        padding = "=" * (-len(payload_b64) % 4)
+        payload_json = base64.urlsafe_b64decode((payload_b64 + padding).encode("utf-8")).decode("utf-8")
         payload = json.loads(payload_json)
 
         if int(payload["exp"]) < int(time.time()):
@@ -97,24 +96,8 @@ def get_current_user(authorization: str = Header(...)) -> int:
     return decode_access_token(token)
 
 
-def resolve_genre_id(conn, genre: str | None = None, genre_id: int | None = None):
-    if genre_id is not None:
-        row = conn.execute("SELECT ID FROM Genre WHERE ID = ?", (genre_id,)).fetchone()
-        return row["ID"] if row else None
-
-    if genre is None:
-        return None
-
-    if genre.isdigit():
-        row = conn.execute("SELECT ID FROM Genre WHERE ID = ?", (int(genre),)).fetchone()
-        if row:
-            return row["ID"]
-
-    row = conn.execute("SELECT ID FROM Genre WHERE Type = ?", (genre,)).fetchone()
-    return row["ID"] if row else None
-
-
 @app.post("/register")
+@app.post("/auth/register")
 def register(body: RegisterBody):
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -126,11 +109,12 @@ def register(body: RegisterBody):
         if existing:
             raise HTTPException(status_code=409, detail="Email déjà utilisé")
 
+        pseudo = body.pseudo if body.pseudo else body.email.split("@")[0]
         hashed = hash_password(body.password)
 
         cursor.execute(
             "INSERT INTO Utilisateur (AdresseMail, Pseudo, MotDePasse) VALUES (?, ?, ?)",
-            (body.email, body.pseudo, hashed),
+            (body.email, pseudo, hashed),
         )
         conn.commit()
         user_id = cursor.lastrowid
@@ -139,6 +123,7 @@ def register(body: RegisterBody):
 
 
 @app.post("/login")
+@app.post("/auth/login")
 def login(body: LoginBody):
     with get_connection() as conn:
         row = conn.execute(
@@ -153,7 +138,7 @@ def login(body: LoginBody):
 
 
 @app.post("/film")
-def createFilm(film: Film):
+async def createFilm(film: Film):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -171,36 +156,52 @@ def createFilm(film: Film):
 
 
 @app.get("/films")
-def getFilms(page: int = 1, per_page: int = 20, genre: str | None = None):
+def getFilms(page: int = 1, per_page: int = 20, genre: str | None = None, genre_id: int | None = None):
     offset = (page - 1) * per_page
+    params = []
 
-    with get_connection() as conn:
-        params = []
+    if genre is not None:
+        where_sql = "JOIN Genre g ON g.ID = f.Genre_ID WHERE g.Type = ?"
+        params.append(genre)
+    elif genre_id is not None:
+        where_sql = "WHERE f.Genre_ID = ?"
+        params.append(genre_id)
+    else:
         where_sql = ""
 
+    with get_connection() as conn:
         if genre is not None:
-            if genre.isdigit():
-                where_sql = "WHERE Genre_ID = ?"
-                params.append(int(genre))
-            else:
-                where_sql = "WHERE Genre_ID = (SELECT ID FROM Genre WHERE Type = ?)"
-                params.append(genre)
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM Film f {where_sql}",
+                params,
+            ).fetchone()["total"]
 
-        total = conn.execute(
-            f"SELECT COUNT(*) as total FROM Film {where_sql}",
-            params,
-        ).fetchone()["total"]
+            films = conn.execute(
+                f"""
+                SELECT f.*
+                FROM Film f
+                {where_sql}
+                ORDER BY f.DateSortie DESC, f.ID ASC
+                LIMIT ? OFFSET ?
+                """,
+                params + [per_page, offset],
+            ).fetchall()
+        else:
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM Film f {where_sql}",
+                params,
+            ).fetchone()["total"]
 
-        films = conn.execute(
-            f"""
-            SELECT *
-            FROM Film
-            {where_sql}
-            ORDER BY DateSortie DESC, ID ASC
-            LIMIT ? OFFSET ?
-            """,
-            params + [per_page, offset],
-        ).fetchall()
+            films = conn.execute(
+                f"""
+                SELECT f.*
+                FROM Film f
+                {where_sql}
+                ORDER BY f.DateSortie DESC, f.ID ASC
+                LIMIT ? OFFSET ?
+                """,
+                params + [per_page, offset],
+            ).fetchall()
 
     return {
         "data": [dict(f) for f in films],
@@ -215,7 +216,7 @@ def getFilm(film_id: int):
     with get_connection() as conn:
         film = conn.execute(
             "SELECT * FROM Film WHERE ID = ?",
-            (film_id,),
+            (film_id,)
         ).fetchone()
 
     if film is None:
@@ -232,6 +233,23 @@ def getGenres():
         ).fetchall()
 
     return [dict(g) for g in genres]
+
+
+def resolve_genre_id(conn, genre: str | None = None, genre_id: int | None = None):
+    if genre_id is not None:
+        row = conn.execute("SELECT ID FROM Genre WHERE ID = ?", (genre_id,)).fetchone()
+        return row["ID"] if row else None
+
+    if genre is not None:
+        row = conn.execute("SELECT ID FROM Genre WHERE Type = ?", (genre,)).fetchone()
+        if row:
+            return row["ID"]
+        if genre.isdigit():
+            row = conn.execute("SELECT ID FROM Genre WHERE ID = ?", (int(genre),)).fetchone()
+            if row:
+                return row["ID"]
+
+    return None
 
 
 @app.post("/preferences")
