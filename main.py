@@ -2,12 +2,12 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 from db import get_connection
 import time
-import base64
-import json
-import hmac
-import hashlib
+import jwt  # PyJWT
 
 app = FastAPI()
+
+SECRET_KEY = "super-secret-key-change-in-production"
+ALGORITHM = "HS256"
 
 class Film(BaseModel):
     id: int | None = None
@@ -21,8 +21,8 @@ class Film(BaseModel):
 
 class RegisterBody(BaseModel):
     email: str
-    pseudo: str
     password: str
+    pseudo: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -33,34 +33,28 @@ class LoginBody(BaseModel):
 class PreferenceBody(BaseModel):
     genre_id: int
 
-SECRET_KEY = "super-secret-key-change-in-production"
+def hash_password(password: str) -> str:
+    import hashlib
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
 
 def create_access_token(user_id: int) -> str:
-    payload = {"sub": user_id, "exp": int(time.time()) + 3600}
-    payload_bytes = json.dumps(payload).encode()
-    sig = hmac.new(SECRET_KEY.encode(), payload_bytes, hashlib.sha256).digest()
-    token = base64.urlsafe_b64encode(payload_bytes + sig).decode()
-    return token
+    payload = {"sub": str(user_id), "exp": int(time.time()) + 3600}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
 
 def decode_access_token(token: str) -> int:
     try:
-        raw = base64.urlsafe_b64decode(token.encode())
-        payload_bytes, sig = raw[:-32], raw[-32:]
-        expected_sig = hmac.new(SECRET_KEY.encode(), payload_bytes, hashlib.sha256).digest()
-        if not hmac.compare_digest(sig, expected_sig):
-            raise HTTPException(status_code=401, detail="Token invalide")
-        payload = json.loads(payload_bytes.decode())
-        if payload.get("exp", 0) < int(time.time()):
-            raise HTTPException(status_code=401, detail="Token expiré")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return int(payload["sub"])
-    except Exception:
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expiré")
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-def get_current_user(authorization: str = Header(..., convert_underscores=False)) -> int:
-    if not authorization:
-        raise HTTPException(status_code=422, detail="Token manquant")
-    token = authorization.split(" ")[1] if " " in authorization else authorization
+def get_current_user(authorization: str = Header(...)) -> int:
+    token = authorization.split(" ")[1] if authorization.startswith("Bearer ") else authorization
     return decode_access_token(token)
 
 @app.get("/ping")
@@ -78,17 +72,16 @@ def getGenres():
 @app.get("/films")
 def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
     offset = (page - 1) * per_page
-    where = ""
-    params = []
-    if genre_id is not None:
-        where = "WHERE Genre_ID = ?"
-        params.append(genre_id)
+    where_sql = "WHERE Genre_ID = ?" if genre_id else ""
+    params = [genre_id] if genre_id else []
+
     with get_connection() as conn:
-        total = conn.execute(f"SELECT COUNT(*) as total FROM Film {where}", params).fetchone()["total"]
+        total = conn.execute(f"SELECT COUNT(*) as total FROM Film {where_sql}", params).fetchone()["total"]
         films = conn.execute(
-            f"SELECT * FROM Film {where} ORDER BY DateSortie DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM Film {where_sql} ORDER BY DateSortie DESC, ID ASC LIMIT ? OFFSET ?",
             params + [per_page, offset]
         ).fetchall()
+
     return {"data": [dict(f) for f in films], "page": page, "per_page": per_page, "total": total}
 
 
@@ -96,38 +89,24 @@ def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
 def getFilm(film_id: int):
     with get_connection() as conn:
         film = conn.execute("SELECT * FROM Film WHERE ID = ?", (film_id,)).fetchone()
-    if film is None:
+    if not film:
         raise HTTPException(status_code=404, detail="Film introuvable")
     return dict(film)
 
-@app.get("/recommendations")
-def get_recommendations(user_id: int = Depends(get_current_user)):
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT f.*
-            FROM Film f
-            JOIN Genre_Utilisateur g ON f.Genre_ID = g.ID_Genre
-            WHERE g.ID_User = ?
-            ORDER BY f.DateSortie DESC
-            LIMIT 5
-            """,
-            (user_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 @app.post("/film")
-async def createFilm(film: Film):
+def createFilm(film: Film):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO Film (Nom, Note, DateSortie, Image, Video, Genre_ID) VALUES (?, ?, ?, ?, ?, ?)",
-            (film.nom, film.note, film.dateSortie, film.image, film.video, film.genreId),
+            (film.nom, film.note, film.dateSortie, film.image, film.video, film.genreId)
         )
         conn.commit()
         new_id = cursor.lastrowid
         res = conn.execute("SELECT * FROM Film WHERE ID = ?", (new_id,)).fetchone()
     return dict(res)
+
 
 @app.post("/auth/register")
 def register(body: RegisterBody):
@@ -136,14 +115,17 @@ def register(body: RegisterBody):
         cursor.execute("SELECT ID FROM Utilisateur WHERE AdresseMail = ?", (body.email,))
         if cursor.fetchone():
             raise HTTPException(status_code=409, detail="Email déjà utilisé")
-        # Hash minimal maison (pas sécurisé pour prod)
-        hashed = body.password[::-1]  # juste pour tests
+
+        pseudo = body.pseudo or body.email.split("@")[0]
+        hashed = hash_password(body.password)
+
         cursor.execute(
             "INSERT INTO Utilisateur (AdresseMail, Pseudo, MotDePasse) VALUES (?, ?, ?)",
-            (body.email, body.pseudo, hashed),
+            (body.email, pseudo, hashed)
         )
         conn.commit()
         user_id = cursor.lastrowid
+
     return {"access_token": create_access_token(user_id), "token_type": "bearer"}
 
 
@@ -153,9 +135,12 @@ def login(body: LoginBody):
         cursor = conn.cursor()
         cursor.execute("SELECT ID, MotDePasse FROM Utilisateur WHERE AdresseMail = ?", (body.email,))
         row = cursor.fetchone()
-    if row is None or row["MotDePasse"] != body.password[::-1]:
+
+    if not row or row["MotDePasse"] != hash_password(body.password):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+
     return {"access_token": create_access_token(row["ID"]), "token_type": "bearer"}
+
 
 @app.post("/preferences", status_code=201)
 def add_preference(body: PreferenceBody, user_id: int = Depends(get_current_user)):
@@ -165,10 +150,7 @@ def add_preference(body: PreferenceBody, user_id: int = Depends(get_current_user
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="Genre introuvable")
         try:
-            cursor.execute(
-                "INSERT INTO Genre_Utilisateur (ID_User, ID_Genre) VALUES (?, ?)",
-                (user_id, body.genre_id)
-            )
+            cursor.execute("INSERT INTO Genre_Utilisateur (ID_User, ID_Genre) VALUES (?, ?)", (user_id, body.genre_id))
             conn.commit()
         except Exception:
             raise HTTPException(status_code=409, detail="Préférence déjà ajoutée")
@@ -179,14 +161,22 @@ def add_preference(body: PreferenceBody, user_id: int = Depends(get_current_user
 def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)):
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM Genre_Utilisateur WHERE ID_User = ? AND ID_Genre = ?",
-            (user_id, genre_id)
-        )
+        cursor.execute("DELETE FROM Genre_Utilisateur WHERE ID_User = ? AND ID_Genre = ?", (user_id, genre_id))
         conn.commit()
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Préférence introuvable")
     return {"detail": "Genre retiré des favoris"}
+
+
+@app.get("/recommendations")
+def get_recommendations(user_id: int = Depends(get_current_user)):
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM Film f JOIN Genre_Utilisateur g ON f.Genre_ID = g.ID_Genre "
+            "WHERE g.ID_User = ? ORDER BY f.DateSortie DESC LIMIT 5", (user_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
 
 if __name__ == "__main__":
     import uvicorn
