@@ -86,7 +86,7 @@ def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
 
 
 @app.get("/films/{film_id}")
-def getFilm(film_id: int):
+def getFilm(film_id: int):#On reçoit un ID de film et on retourne les infos de ce film
     with get_connection() as conn:
         film = conn.execute("SELECT * FROM Film WHERE ID = ?", (film_id,)).fetchone()
     if not film:
@@ -95,7 +95,7 @@ def getFilm(film_id: int):
 
 
 @app.post("/film")
-def createFilm(film: Film):
+def createFilm(film: Film):#On reçoit les infos d'un film et on l'ajoute à la base de données
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -109,14 +109,14 @@ def createFilm(film: Film):
 
 
 @app.post("/auth/register")
-def register(body: RegisterBody):
+def register(body: RegisterBody):#On reçoit les infos d'inscription d'un utilisateur, on vérifie que l'email n'est pas déjà utilisé, on hash le mot de passe et on crée un token d'accès pour cet utilisateur
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT ID FROM Utilisateur WHERE AdresseMail = ?", (body.email,))
-        if cursor.fetchone():
+        if cursor.fetchone():#pour les curseurs j'ai aussi demandé a une IA parce que c'est quelque chose de totallement nouveau pour moi, mais j'ai compris (un peu) comment ça marche
             raise HTTPException(status_code=409, detail="Email déjà utilisé")
 
-        pseudo = body.pseudo or body.email.split("@")[0]
+        pseudo = body.pseudo or body.email.split("@")[0]#si y a pas de pseudo on prend la partie avant le @ dans l'email
         hashed = hash_password(body.password)
 
         cursor.execute(
@@ -130,7 +130,7 @@ def register(body: RegisterBody):
 
 
 @app.post("/auth/login")
-def login(body: LoginBody):
+def login(body: LoginBody):#On reçoit les infos de connexion d'un utilisateur, on vérifie que l'email existe et que le mot de passe correspond, puis on crée un token d'accès pour cet utilisateur
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT ID, MotDePasse FROM Utilisateur WHERE AdresseMail = ?", (body.email,))
