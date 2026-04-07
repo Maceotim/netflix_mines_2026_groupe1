@@ -1,12 +1,10 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from db import get_connection
 from passlib.context import CryptContext
 
 app = FastAPI()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-bearer_scheme = HTTPBearer()
 
 # =====================
 # MODELES
@@ -26,22 +24,18 @@ class RegisterBody(BaseModel):
     password: str
 
 # =====================
-# TOKEN SIMPLIFIE
+# TOKEN SIMPLIFIE (pour test)
 # =====================
 def create_token(user_id: int) -> str:
-    # pour test local : juste l'ID en string
-    return str(user_id)
+    return str(user_id)  # juste l'ID
 
 # =====================
-# ROUTES TEST
+# ROUTES
 # =====================
 @app.get("/ping")
 def ping():
     return {"message": "pong"}
 
-# =====================
-# FILMS
-# =====================
 @app.post("/film")
 def createFilm(film: Film):
     with get_connection() as conn:
@@ -60,7 +54,7 @@ def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
     offset = (page - 1) * per_page
     where = ""
     params = []
-    if genre_id is not None:
+    if genre_id:
         where = "WHERE Genre_ID = ?"
         params.append(genre_id)
     with get_connection() as conn:
@@ -72,13 +66,10 @@ def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
 def getFilm(film_id: int):
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM Film WHERE ID = ?", (film_id,)).fetchone()
-    if row is None:
+    if not row:
         raise HTTPException(status_code=404, detail="Film introuvable")
     return dict(row)
 
-# =====================
-# GENRES
-# =====================
 @app.get("/genres")
 def getGenres():
     with get_connection() as conn:
@@ -92,13 +83,10 @@ def getGenres():
 def register(body: RegisterBody):
     with get_connection() as conn:
         cursor = conn.cursor()
-        # Vérifie si l'email existe déjà
         cursor.execute("SELECT ID FROM Utilisateur WHERE AdresseMail = ?", (body.email,))
         if cursor.fetchone():
             raise HTTPException(status_code=400, detail="Email déjà utilisé")
-        # hash du mot de passe
         hashed = pwd_context.hash(body.password)
-        # insertion
         cursor.execute(
             "INSERT INTO Utilisateur (AdresseMail, Pseudo, MotDePasse) VALUES (?, ?, ?)",
             (body.email, body.pseudo, hashed)
