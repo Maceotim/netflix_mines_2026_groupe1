@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 from db import get_connection
 import time
-import jwt  # PyJWT
+import jwt  
 
 app = FastAPI()
 
@@ -53,34 +53,34 @@ def decode_access_token(token: str) -> int:
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-def get_current_user(authorization: str = Header(...)) -> int:
-    token = authorization.split(" ")[1] if authorization.startswith("Bearer ") else authorization
+def get_current_user(authorization: str = Header(...)) -> int: #pour relier le token à l'utilisateur
+    token = authorization.split(" ")[1] if authorization.startswith("Bearer ") else authorization #on s'assure du bon format du token genre que y a pas de "Bearer " devant
     return decode_access_token(token)
 
-@app.get("/ping")
+@app.get("/ping") #test de base pour vérifier que ca fonctionne
 def ping():
     return {"message": "pong"}
 
 
-@app.get("/genres")
+@app.get("/genres")#récupérer la liste des genres
 def getGenres():
     with get_connection() as conn:
         genres = conn.execute("SELECT * FROM Genre ORDER BY Type ASC").fetchall()
     return [dict(g) for g in genres]
 
-
-@app.get("/films")
+#récupérer la liste des films avec pagination et on filtre par genre 
+@app.get("/films")#route get
 def getFilms(page: int = 1, per_page: int = 20, genre_id: int | None = None):
-    offset = (page - 1) * per_page
-    where_sql = "WHERE Genre_ID = ?" if genre_id else ""
+    offset = (page - 1) * per_page#on arrive bien sur le premier film de la page demandée
+    where_sql = "WHERE Genre_ID = ?" if genre_id else "" #si y a un genre on les filtre sinon on prend tous les films
     params = [genre_id] if genre_id else []
 
-    with get_connection() as conn:
-        total = conn.execute(f"SELECT COUNT(*) as total FROM Film {where_sql}", params).fetchone()["total"]
+    with get_connection() as conn:#on se connecte à la base de données
+        total = conn.execute(f"SELECT COUNT(*) as total FROM Film {where_sql}", params).fetchone()["total"]#on compte le nombre total de films pour le filtrage demandé pour pouvoir faire la pagination
         films = conn.execute(
-            f"SELECT * FROM Film {where_sql} ORDER BY DateSortie DESC, ID ASC LIMIT ? OFFSET ?",
+            f"SELECT * FROM Film {where_sql} ORDER BY DateSortie DESC, ID ASC LIMIT ? OFFSET ?",#On trie les films
             params + [per_page, offset]
-        ).fetchall()
+        ).fetchall()#J'ai demandé de l'aide à une IA parce que je maitrise mal le SQL mais je me suis renseigné pour comprendre ce code
 
     return {"data": [dict(f) for f in films], "page": page, "per_page": per_page, "total": total}
 
