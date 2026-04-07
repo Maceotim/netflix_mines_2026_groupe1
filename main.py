@@ -61,7 +61,6 @@ def get_current_user(authorization: str = Header(...)) -> int:
 def ping():
     return {"message": "pong"}
 
-
 @app.get("/genres")
 def getGenres():
     with get_connection() as conn:
@@ -142,40 +141,47 @@ def login(body: LoginBody):
     return {"access_token": create_access_token(row["ID"]), "token_type": "bearer"}
 
 
-@app.post("/preferences", status_code=201)
+@app.post("/preferences", status_code=201) #Permet à un utilisateur d'ajouter un film en favori
 def add_preference(body: PreferenceBody, user_id: int = Depends(get_current_user)):
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT ID FROM Genre WHERE ID = ?", (body.genre_id,))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Genre introuvable")
+        cursor.execute("SELECT ID FROM Genre WHERE ID = ?", (body.genre_id,)) #est-ce que le genre que l'utilisateur veut ajouter existe vraiment ?
+        if not cursor.fetchone(): 
+            raise HTTPException(status_code=404, detail="Genre introuvable") #si le genre n'existe pas en base, on renvoie une erreur 404
         try:
-            cursor.execute("INSERT INTO Genre_Utilisateur (ID_User, ID_Genre) VALUES (?, ?)", (user_id, body.genre_id))
-            conn.commit()
+            cursor.execute("INSERT INTO Genre_Utilisateur (ID_User, ID_Genre) VALUES (?, ?)", (user_id, body.genre_id)) #on lie l'utilisateur (user_id) au genre (genre_id)
+            conn.commit() #on valide l'écriture dans la base
         except Exception:
-            raise HTTPException(status_code=409, detail="Préférence déjà ajoutée")
+            raise HTTPException(status_code=409, detail="Préférence déjà ajoutée") #si le lien existe déjà, la base de données lève une erreur 409
     return {"detail": "Genre ajouté aux favoris"}
 
 
 @app.delete("/preferences/{genre_id}")
-def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)):
+def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)): 
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM Genre_Utilisateur WHERE ID_User = ? AND ID_Genre = ?", (user_id, genre_id))
+        cursor.execute("DELETE FROM Genre_Utilisateur WHERE ID_User = ? AND ID_Genre = ?", (user_id, genre_id)) #On tente de supprimer la ligne correspondante
         conn.commit()
-        if cursor.rowcount == 0:
+        if cursor.rowcount == 0: #cursor.rowcount indique le nombre de lignes supprimées.
+        # Si c'est 0, cela veut dire que l'utilisateur n'avait pas ce genre en favori.
             raise HTTPException(status_code=404, detail="Préférence introuvable")
     return {"detail": "Genre retiré des favoris"}
 
 
 @app.get("/recommendations")
 def get_recommendations(user_id: int = Depends(get_current_user)):
-    with get_connection() as conn:
+    with get_connection() as conn: 
+        # On prend les films (f) ET on regarde la table des préférences (g).
+        # On ne garde que les films dont le Genre_ID correspond aux genres favoris de l'utilisateur.
         rows = conn.execute(
-            "SELECT * FROM Film f JOIN Genre_Utilisateur g ON f.Genre_ID = g.ID_Genre "
-            "WHERE g.ID_User = ? ORDER BY f.DateSortie DESC LIMIT 5", (user_id,)
+            "SELECT f.* FROM Film f "
+            "JOIN Genre_Utilisateur g ON f.Genre_ID = g.ID_Genre "
+            "WHERE g.ID_User = ? " # Uniquement pour cet utilisateur
+            "ORDER BY f.DateSortie DESC " # Les plus récents d'abord
+            "LIMIT 5", # On s'arrête aux 5 meilleurs résultats
+            (user_id,)
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows] # On transforme les lignes SQL en dictionnaires JSON pour le client
 
 
 if __name__ == "__main__":
