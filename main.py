@@ -2,13 +2,13 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 from db import get_connection
 import time
+import base64
+import json
+import hmac
+import hashlib
 
 app = FastAPI()
 
-
-# =========================
-# MODELES
-# =========================
 class Film(BaseModel):
     id: int | None = None
     nom: str
@@ -32,15 +32,6 @@ class LoginBody(BaseModel):
 
 class PreferenceBody(BaseModel):
     genre_id: int
-
-
-# =========================
-# JWT minimal maison (pas de lib externe)
-# =========================
-import base64
-import json
-import hmac
-import hashlib
 
 SECRET_KEY = "super-secret-key-change-in-production"
 
@@ -72,10 +63,6 @@ def get_current_user(authorization: str = Header(..., convert_underscores=False)
     token = authorization.split(" ")[1] if " " in authorization else authorization
     return decode_access_token(token)
 
-
-# =========================
-# ROUTES FIXES
-# =========================
 @app.get("/ping")
 def ping():
     return {"message": "pong"}
@@ -113,10 +100,6 @@ def getFilm(film_id: int):
         raise HTTPException(status_code=404, detail="Film introuvable")
     return dict(film)
 
-
-# =========================
-# ROUTE RECOMMENDATIONS AVANT ROUTES PARAM
-# =========================
 @app.get("/recommendations")
 def get_recommendations(user_id: int = Depends(get_current_user)):
     with get_connection() as conn:
@@ -133,10 +116,6 @@ def get_recommendations(user_id: int = Depends(get_current_user)):
         ).fetchall()
     return [dict(r) for r in rows]
 
-
-# =========================
-# POST /film
-# =========================
 @app.post("/film")
 async def createFilm(film: Film):
     with get_connection() as conn:
@@ -150,10 +129,6 @@ async def createFilm(film: Film):
         res = conn.execute("SELECT * FROM Film WHERE ID = ?", (new_id,)).fetchone()
     return dict(res)
 
-
-# =========================
-# AUTH
-# =========================
 @app.post("/auth/register")
 def register(body: RegisterBody):
     with get_connection() as conn:
@@ -182,10 +157,6 @@ def login(body: LoginBody):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     return {"access_token": create_access_token(row["ID"]), "token_type": "bearer"}
 
-
-# =========================
-# PREFERENCES
-# =========================
 @app.post("/preferences", status_code=201)
 def add_preference(body: PreferenceBody, user_id: int = Depends(get_current_user)):
     with get_connection() as conn:
@@ -217,10 +188,6 @@ def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Préférence introuvable")
     return {"detail": "Genre retiré des favoris"}
 
-
-# =========================
-# LANCEMENT SERVEUR
-# =========================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
