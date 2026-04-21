@@ -168,21 +168,20 @@ def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Préférence introuvable")
     return {"detail": "Genre retiré des favoris"}
 
-
 @app.get("/recommendations")
 def get_recommendations(user_id: int = Depends(get_current_user)):
-    with get_connection() as conn: 
-        # On prend les films (f) ET on regarde la table des préférences (g).
+    with get_connection() as conn:# On prend les films (f) ET on regarde la table des préférences (g).
         # On ne garde que les films dont le Genre_ID correspond aux genres favoris de l'utilisateur.
         rows = conn.execute(
-            "SELECT f.* FROM Film f "
+            "SELECT DISTINCT f.* FROM Film f "  
             "JOIN Genre_Utilisateur g ON f.Genre_ID = g.ID_Genre "
-            "WHERE g.ID_User = ? " # Uniquement pour cet utilisateur
-            "ORDER BY f.DateSortie DESC " # Les plus récents d'abord
-            "LIMIT 5", # On s'arrête aux 5 meilleurs résultats
+            "WHERE g.ID_User = ? "# Uniquement pour cet utilisateur
+            "ORDER BY f.DateSortie DESC "# Les plus récents d'abord
+            "LIMIT 5",# On s'arrête aux 5 meilleurs résultats
             (user_id,)
         ).fetchall()
-    return [dict(r) for r in rows] # On transforme les lignes SQL en dictionnaires JSON pour le client
+    return [dict(r) for r in rows]# On transforme les lignes SQL en dictionnaires JSON pour le client
+
 
 
 if __name__ == "__main__":
