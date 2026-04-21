@@ -168,7 +168,7 @@ def remove_preference(genre_id: int, user_id: int = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Préférence introuvable")
     return {"detail": "Genre retiré des favoris"}
 
-@app.get("/recommendations")
+@app.get("/preferences/recommendations")
 def get_recommendations(user_id: int = Depends(get_current_user)):
     with get_connection() as conn:# On prend les films (f) ET on regarde la table des préférences (g).
         # On ne garde que les films dont le Genre_ID correspond aux genres favoris de l'utilisateur.
